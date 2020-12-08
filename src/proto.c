@@ -110,6 +110,57 @@ bool get_header(struct MBuf *data, PktHdr *pkt)
 	return mbuf_get_bytes(&pkt->data, got, &ptr);
 }
 
+bool get_proxy_protocol_header(struct MBuf *data, PktHdr *pkt)
+{
+	struct MBuf hdr;
+	char *end;
+	int len, size, final;
+	const char *v1;
+
+	const char sigv1[6] = "PROXY ";
+
+	mbuf_copy(data, &hdr);
+	len = mbuf_avail_for_read(&hdr);
+	
+	/* proxy protocol v1 */
+	if (len >= PP_MIN_LEN && memcmp(mbuf_data(&hdr), sigv1, 6) == 0) {
+		end = get_proxy_hdr(&hdr, &v1);
+		if (!end || end[1] != '\n') {
+			log_error("partial of invalid proxy protocol v1 header");
+			return false;
+		}
+		size = strlen(v1);
+		*end = '\0'; /* terminate string for parsing */
+
+		pkt->type = PKT_PROXY;
+
+		if (len < size) {
+			final = len;
+		} else {
+			final = size;
+		}
+		pkt->len = final;
+
+		/* consume proxy header as read */
+		if (!mbuf_slice(data, final, &pkt->data)) 
+			return false;
+
+		return true;
+	}
+
+	return false;
+}
+
+char *get_proxy_hdr(struct MBuf *buf, const char **dst_p)
+{	
+	const char *res = (char *)buf->data + buf->read_pos;
+	const uint8_t *nul = memchr(res, '\r', mbuf_avail_for_read(buf));
+	if (!nul)
+		return nul;
+	*dst_p = res;
+	buf->read_pos = nul + 1 - buf->data;
+	return nul ;
+}
 
 /*
  * Send error message packet to client.

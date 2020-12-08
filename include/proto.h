@@ -21,6 +21,9 @@
 /* new style V3 packet header len - type:1b, len:4b */
 #define NEW_HEADER_LEN	5
 
+/* proxy protocol header */
+#define PP_MIN_LEN	8
+
 /*
  * parsed packet header, plus whatever data is
  * available in SBuf for this packet.
@@ -38,6 +41,8 @@ struct PktHdr {
 };
 
 bool get_header(struct MBuf *data, PktHdr *pkt) _MUSTCHECK;
+bool get_proxy_protocol_header(struct MBuf *data, PktHdr *pkt);
+char *get_proxy_hdr(struct MBuf *buf, const char **dst_p);
 
 bool send_pooler_error(PgSocket *client, bool send_ready, const char *msg)  /*_MUSTCHECK*/;
 void log_server_error(const char *note, PktHdr *pkt);

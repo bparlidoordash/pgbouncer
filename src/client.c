@@ -751,7 +751,10 @@ static bool handle_client_startup(PgSocket *client, PktHdr *pkt)
 		} else if (!decide_startup_pool(client, pkt)) {
 			return false;
 		}
-
+		break;
+	case PKT_PROXY:		/* PROXY protocol v1 */
+		if (!handle_proxy_protocol(client, pkt))
+			return false;
 		break;
 	case 'p':		/* PasswordMessage, SASLInitialResponse, or SASLResponse */
 		/* too early */
@@ -958,7 +961,6 @@ bool client_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 	PgSocket *client = container_of(sbuf, PgSocket, sbuf);
 	PktHdr pkt;
 
-
 	Assert(!is_server_socket(client));
 	Assert(client->sbuf.sock);
 	Assert(client->state != CL_FREE);
@@ -990,7 +992,7 @@ bool client_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			slog_noise(client, "C: got partial header, trying to wait a bit");
 			return false;
 		}
-		if (!get_header(data, &pkt)) {
+		if (!get_proxy_protocol_header(data, &pkt) && !get_header(data, &pkt)) {
 			char hex[8*2 + 1];
 			disconnect_client(client, true, "bad packet header: '%s'",
 					  hdr2hex(data, hex, sizeof(hex)));
@@ -1027,4 +1029,44 @@ bool client_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 		break;
 	}
 	return res;
+}
+
+/* parse proxy protocol v1 and set client address and port if proxy is in a trusted network */
+bool handle_proxy_protocol(PgSocket *client, PktHdr *pkt)
+{
+	const char *str, *fam, *saddr;
+	char *token, *fields[6], *copy, *saveptr;
+	int elems, sport;
+
+	elems = 6; /* number of elements sent by the protocol */
+
+	if (!mbuf_get_string(&pkt->data, &str)) {
+		disconnect_client(client, true, "cannot parse proxy protocol v1 string");
+		return false;
+	}
+
+	int i = 0;
+	token = strtok_r(str, " ", &saveptr);
+	while (token != NULL && i < elems - 1) { 
+		fields[i] = token;
+		token = strtok_r(NULL, " ", &saveptr);
+		i++;
+	}
+
+	fam = fields[1];
+	saddr = fields[2];
+	sport = atoi(fields[4]);
+
+	if (strcmp(fam, "TCP4") == 0 || strcmp(fam, "TCP6") == 0) {
+		slog_noise(client, "updating client source address to %s:%d", saddr, sport);
+		if (!pga_pton(&(client->remote_addr), saddr, sport)) {
+			disconnect_client(client, true, "cannot update client remote address");
+			return false;
+		}
+	} else {
+		disconnect_client(client, true, "unsupported network familly sent by proxy protocol");
+		return false;
+	}
+
+	return true;
 }
